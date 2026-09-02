@@ -16,6 +16,7 @@ use pythonize::{depythonize, pythonize};
 use serde_json::Value;
 use std::io::Cursor;
 
+use crate::config::PyConfig;
 use crate::error::PeprsCoreError;
 use crate::samples::{sample_to_pysample, PySample, PySamplesIter};
 
@@ -661,23 +662,55 @@ impl PyProject {
     }
 
     ///
-    /// Get the raw project config as a Python dict.
+    /// Get the project config as a live, mutable mapping.
+    ///
+    /// Returns a [`Config`](crate::config::PyConfig) proxy backed by this
+    /// project. Item assignment (`project.config["key"] = value`) mutates the
+    /// project's config in place and persists across accesses. Call
+    /// [`reprocess`](Self::reprocess) afterward to apply structural changes (e.g.
+    /// sample modifiers) to the processed sample table.
     ///
     /// # Returns
     ///
-    /// A Python dict of the raw config, or `None` if no config exists.
+    /// A `Config` mapping proxy.
     ///
-    #[getter]
-    pub fn get_config(&self) -> PyResult<Py<PyAny>> {
-        Python::attach(|py| match &self.inner.config {
-            Some(config) => {
-                let value = config.get_raw_config(None, None);
-                let obj =
-                    pythonize(py, &value).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-                Ok(obj.into())
-            }
-            None => Ok(py.None()),
-        })
+    #[getter(config)]
+    fn get_config(slf: Py<Self>, py: Python<'_>) -> PyResult<Py<PyConfig>> {
+        Py::new(py, PyConfig { project: slf })
+    }
+
+    ///
+    /// Replace the entire project config from a dict-like mapping.
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - A dict (or `Config`) providing the new config.
+    ///
+    #[setter(config)]
+    fn set_config(&mut self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        let json_val: Value = if let Ok(cfg) = value.cast::<PyConfig>() {
+            cfg.borrow().snapshot(py)?
+        } else {
+            depythonize(value).map_err(|e| PyRuntimeError::new_err(e.to_string()))?
+        };
+        let mut new_config: ProjectConfig = serde_json::from_value(json_val.clone())
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        new_config.raw = Some(json_val);
+        self.inner.config = Some(new_config);
+        Ok(())
+    }
+
+    ///
+    /// Re-run sample processing from the current in-memory config and raw tables.
+    ///
+    /// Recomputes the processed sample table by re-applying the config's sample
+    /// modifiers and subsample merge to the in-memory raw samples/subsamples.
+    /// Does not read anything from disk. Call this after mutating `config` so the
+    /// processed samples reflect the changes.
+    ///
+    pub fn reprocess(&mut self) -> Result<(), PeprsCoreError> {
+        self.inner.reprocess()?;
+        Ok(())
     }
 
     ///

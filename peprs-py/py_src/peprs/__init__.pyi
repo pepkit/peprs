@@ -78,8 +78,16 @@ class Project:
     sample_name_colname: str
     """Column name used as the sample table index (default: "sample_name")."""
 
-    config: Optional[Dict[str, Any]]
-    """Raw project configuration as a dictionary, or None if no config exists."""
+    config: "Config"
+    """Live, mutable view of the project configuration.
+
+    Returns a :class:`Config` mapping backed by this project. Item assignment
+    (``project.config["key"] = value``) mutates the project's config in place and
+    persists across accesses. Assigning a whole dict (``project.config = {...}``)
+    replaces the config. Editing structural keys (e.g. ``sample_modifiers``)
+    updates the saved config immediately; call :meth:`reprocess` to apply them to
+    the processed sample table.
+    """
 
     samples: SamplesIter
     """Iterator over processed samples. Each element is a ``Sample`` object."""
@@ -285,12 +293,83 @@ class Project:
         """
         ...
 
+    def reprocess(self) -> None:
+        """Re-run sample processing from the current in-memory config and tables.
+
+        Recomputes the processed sample table by re-applying the config's sample
+        modifiers and subsample merge to the in-memory raw samples/subsamples.
+        Does **not** read anything from disk. Call this after mutating
+        :attr:`config` so the processed samples reflect the changes.
+
+        :raises ValueError: if the project has no config
+        """
+        ...
+
     def len(self) -> int:
         """Return the number of samples in the project."""
         ...
 
     def __len__(self) -> int: ...
     def __repr__(self) -> str: ...
+
+
+class Config:
+    """A live, mutable mapping view over a :class:`Project`'s configuration.
+
+    Reads go through the owning project and writes mutate its config in place, so
+    changes persist across accesses and are written out by
+    :meth:`Project.write_raw` and ``Project.to_dict(raw=True)``. Editing
+    structural keys (e.g. ``sample_modifiers``) updates the saved config
+    immediately; call :meth:`Project.reprocess` to apply them to the processed
+    sample table.
+    """
+
+    def __getitem__(self, key: str) -> Any:
+        """Get a config value by key.
+
+        :raises KeyError: if the key is not present
+        """
+        ...
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        """Set a config value, mutating the owning project's config in place."""
+        ...
+
+    def __delitem__(self, key: str) -> None:
+        """Remove a config key.
+
+        :raises KeyError: if the key is not present
+        """
+        ...
+
+    def __contains__(self, key: str) -> bool: ...
+    def __len__(self) -> int: ...
+    def __iter__(self) -> Iterator[str]: ...
+    def __repr__(self) -> str: ...
+
+    def keys(self) -> List[str]:
+        """Return the config's top-level keys."""
+        ...
+
+    def values(self) -> List[Any]:
+        """Return the config's top-level values."""
+        ...
+
+    def items(self) -> List[tuple[str, Any]]:
+        """Return the config's top-level (key, value) pairs."""
+        ...
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Get a config value, returning *default* if the key is absent."""
+        ...
+
+    def update(self, other: Dict[str, Any]) -> None:
+        """Merge the key/value pairs from *other* into the config."""
+        ...
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a plain (non-live) ``dict`` copy of the config."""
+        ...
 
 
 class SamplesIter:
