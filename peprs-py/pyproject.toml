@@ -25,8 +25,8 @@ classifiers = [
 readme = "README.md"
 dynamic = ["version"]
 dependencies = [
-    "polars>=1.0.0",
-    "pyarrow>=24.0.0",
+    "polars>=1.0.0,<3.0.0",
+    "pyarrow>=26.0.0",
 ]
 
 [project.scripts]
