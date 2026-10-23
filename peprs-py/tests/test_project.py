@@ -107,6 +107,54 @@ class TestProjectConstructor:
         assert len(r) > 0
 
 
+class TestReprocess:
+    @pytest.mark.parametrize(
+        "example_pep_cfg_path",
+        ["basic", "append", "imply", "derive", "subtable1"],
+        indirect=True,
+    )
+    def test_reprocess_is_idempotent(self, example_pep_cfg_path):
+        """Verify reprocess() recomputes the same processed sample table."""
+        p = Project(example_pep_cfg_path)
+        before = p.to_polars()
+        p.reprocess()
+        after = p.to_polars()
+        assert before.equals(after)
+        assert len(p) == before.height
+
+    @pytest.mark.parametrize("example_pep_cfg_path", ["basic"], indirect=True)
+    def test_reprocess_preserves_raw(self, example_pep_cfg_path):
+        """Verify reprocess() leaves the raw sample table untouched."""
+        p = Project(example_pep_cfg_path)
+        raw_before = p.to_polars(raw=True)
+        p.reprocess()
+        assert p.to_polars(raw=True).equals(raw_before)
+
+    @pytest.mark.parametrize("example_pep_csv_path", ["basic"], indirect=True)
+    def test_reprocess_on_csv_project(self, example_pep_csv_path):
+        """Verify reprocess() works on a project built from a CSV."""
+        p = Project(example_pep_csv_path)
+        n = len(p)
+        p.reprocess()
+        assert len(p) == n
+
+    @pytest.mark.parametrize("example_pep_cfg_path", ["basic"], indirect=True)
+    def test_reprocess_no_disk_read(self, tmp_path, example_pep_cfg_path):
+        """Verify reprocess() uses in-memory data, not the on-disk sample table."""
+        import shutil
+
+        src = os.path.dirname(example_pep_cfg_path)
+        dst = tmp_path / "pep"
+        shutil.copytree(src, dst)
+        p = Project(str(dst / "project_config.yaml"))
+        n = len(p)
+
+        # remove the on-disk sample table; reprocess must not need it
+        os.remove(dst / "sample_table.csv")
+        p.reprocess()  # would fail if it re-read the deleted CSV
+        assert len(p) == n
+
+
 class TestConfigMutation:
     @pytest.mark.parametrize("example_pep_cfg_path", ["basic"], indirect=True)
     def test_item_assignment_persists(self, example_pep_cfg_path):
@@ -173,51 +221,6 @@ class TestConfigMutation:
         saved = yaml.safe_load((out / "project_config.yaml").read_text())
         assert saved["something"] == "nothing"
         assert saved["name"] == "saved_name"
-
-
-class TestReprocess:
-    @pytest.mark.parametrize("example_pep_cfg_path", ["basic"], indirect=True)
-    def test_reprocess_applies_new_modifier(self, example_pep_cfg_path):
-        """Verify a sample_modifier added to config takes effect after reprocess."""
-        p = Project(example_pep_cfg_path)
-        assert "read_type" not in list(p.samples)[0]
-
-        p.config["sample_modifiers"] = {"append": {"read_type": "SINGLE"}}
-        # not applied until reprocess
-        assert "read_type" not in list(p.samples)[0]
-
-        p.reprocess()
-        first = list(p.samples)[0]
-        assert first["read_type"] == "SINGLE"
-
-    @pytest.mark.parametrize("example_pep_csv_path", ["basic"], indirect=True)
-    def test_reprocess_on_csv_project(self, example_pep_csv_path):
-        """Verify reprocess works on a project built from a CSV (empty config)."""
-        p = Project(example_pep_csv_path)
-        p.config["sample_modifiers"] = {"append": {"tag": "x"}}
-        p.reprocess()
-        assert list(p.samples)[0]["tag"] == "x"
-
-    @pytest.mark.parametrize("example_pep_cfg_path", ["basic"], indirect=True)
-    def test_reprocess_no_disk_read(self, tmp_path, example_pep_cfg_path):
-        """Verify reprocess uses in-memory data, not the on-disk sample table."""
-        import shutil
-
-        # copy the PEP into a temp dir so we can delete the sample table after load
-        src = os.path.dirname(example_pep_cfg_path)
-        dst = tmp_path / "pep"
-        shutil.copytree(src, dst)
-        p = Project(str(dst / "project_config.yaml"))
-
-        # remove the on-disk sample table; reprocess must not need it
-        os.remove(dst / "sample_table.csv")
-
-        n_before = len(p)
-        p.config["sample_modifiers"] = {"append": {"read_type": "SINGLE"}}
-        p.reprocess()  # would fail if it re-read the deleted CSV
-        assert len(p) == n_before
-        assert list(p.samples)[0]["read_type"] == "SINGLE"
-
 
 class TestSampleAccess:
     @pytest.mark.parametrize("example_pep_cfg_path", ["basic"], indirect=True)

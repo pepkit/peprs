@@ -1732,6 +1732,57 @@ mod tests {
     }
 
     #[rstest]
+    fn reprocess_applies_config_change(basic_pep: &'static str) {
+        use crate::config::SampleModifiers;
+        use std::collections::HashMap;
+
+        let mut proj = Project::from_config(basic_pep).build().unwrap();
+        // basic pep has no `read_type` column before any modifier is applied
+        assert!(proj.samples.column("read_type").is_err());
+
+        // add an APPEND modifier to the in-memory config, then reprocess
+        let mut append = HashMap::new();
+        append.insert("read_type".to_string(), "SINGLE".to_string());
+        proj.config.as_mut().unwrap().sample_modifiers = Some(SampleModifiers {
+            remove: None,
+            append: Some(append),
+            duplicate: None,
+            imply: None,
+            derive: None,
+        });
+
+        proj.reprocess().unwrap();
+
+        // the new column is now present with the appended value on every row
+        let read_type: Vec<String> = proj
+            .samples
+            .column("read_type")
+            .unwrap()
+            .str()
+            .unwrap()
+            .iter()
+            .flatten()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(read_type, vec!["SINGLE"; proj.len()]);
+
+        // reprocess is idempotent: running again keeps the same result
+        proj.reprocess().unwrap();
+        assert_eq!(proj.samples.column("read_type").unwrap().len(), proj.len());
+    }
+
+    #[rstest]
+    fn reprocess_preserves_raw_samples(basic_pep: &'static str) {
+        let mut proj = Project::from_config(basic_pep).build().unwrap();
+        let raw_before = proj.samples_raw.clone();
+        proj.reprocess().unwrap();
+        // reprocessing recomputes `samples` from `samples_raw` and leaves the raw
+        // table untouched
+        assert!(proj.samples_raw.equals(&raw_before));
+        assert_eq!(proj.len(), 2);
+    }
+
+    #[rstest]
     fn get_sample_from_pep(basic_pep: &'static str) {
         let proj = Project::from_config(basic_pep).build();
         assert_eq!(proj.is_ok(), true);
