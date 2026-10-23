@@ -1,6 +1,6 @@
 use pyo3::exceptions::{PyKeyError, PyRuntimeError};
 use pyo3::prelude::*;
-use pyo3::types::{PyList, PyDict};
+use pyo3::types::{PyDict, PyList};
 use pythonize::{depythonize, pythonize};
 use serde_json::Value;
 
@@ -84,11 +84,7 @@ impl PyConfig {
     }
 
     fn __len__(&self, py: Python<'_>) -> PyResult<usize> {
-        Ok(self
-            .snapshot(py)?
-            .as_object()
-            .map(|m| m.len())
-            .unwrap_or(0))
+        Ok(self.snapshot(py)?.as_object().map(|m| m.len()).unwrap_or(0))
     }
 
     fn __iter__(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {

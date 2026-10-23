@@ -1124,7 +1124,6 @@ impl Project {
             }
         }
 
-
         Ok(samples)
     }
 
