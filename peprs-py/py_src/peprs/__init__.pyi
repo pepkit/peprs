@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional, Union, Iterator
+from typing import Any, Dict, List, Mapping, Optional, Union, Iterator
 
 from polars import DataFrame as PolarsDataFrame
 from pandas import DataFrame as PandasDataFrame
@@ -302,6 +302,22 @@ class Project:
         :attr:`config` so the processed samples reflect the changes.
 
         :raises ValueError: if the project has no config
+        """
+        ...
+
+    def add_sample(self, sample: Mapping[str, Any]) -> None:
+        """Add a new sample to the project's raw sample table.
+
+        Appends one row to the raw sample table. The processed sample table is
+        left unchanged; call :meth:`reprocess` afterward to fold the new sample
+        into the processed output. Columns new to the project are added (existing
+        rows become null); columns omitted from ``sample`` are null for the new
+        row.
+
+        :param sample: a mapping of attribute name to value describing the sample
+        :raises ValueError: if ``sample`` is not a mapping
+        :raises RuntimeError: if the sample's index value (e.g. ``sample_name``)
+            already exists in the raw sample table
         """
         ...
 

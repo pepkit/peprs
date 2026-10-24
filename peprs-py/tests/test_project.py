@@ -443,3 +443,35 @@ class TestAlternativeConstructors:
         p2 = Project(csv_path)
         assert p1 != p2
         assert (p1 == p2) == False
+
+
+class TestAddSample:
+    @pytest.mark.parametrize("example_pep_cfg_path", ["basic"], indirect=True)
+    def test_add_sample_raw_only(self, example_pep_cfg_path):
+        """add_sample grows the raw table but leaves processed samples untouched."""
+        p = Project(example_pep_cfg_path)
+        raw_before = len(p.to_polars(raw=True))
+        processed_before = len(p.to_polars())
+
+        p.add_sample({"sample_name": "frog_3", "protocol": "anySampleType", "file": "data/frog3.txt"})
+
+        assert len(p.to_polars(raw=True)) == raw_before + 1
+        assert len(p.to_polars()) == processed_before
+
+    @pytest.mark.parametrize("example_pep_cfg_path", ["basic"], indirect=True)
+    def test_add_sample_then_reprocess(self, example_pep_cfg_path):
+        """reprocess folds a newly added sample into the processed table."""
+        p = Project(example_pep_cfg_path)
+        processed_before = len(p.to_polars())
+
+        p.add_sample({"sample_name": "frog_3", "protocol": "anySampleType", "file": "data/frog3.txt"})
+        p.reprocess()
+
+        assert len(p.to_polars()) == processed_before + 1
+
+    @pytest.mark.parametrize("example_pep_cfg_path", ["basic"], indirect=True)
+    def test_add_sample_rejects_duplicate(self, example_pep_cfg_path):
+        """Adding a sample whose sample_name already exists raises."""
+        p = Project(example_pep_cfg_path)
+        with pytest.raises(Exception):
+            p.add_sample({"sample_name": "frog_1", "protocol": "anySampleType"})

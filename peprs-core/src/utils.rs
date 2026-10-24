@@ -111,6 +111,32 @@ pub fn extract_template_columns(template: &str) -> Vec<String> {
         .collect()
 }
 
+/// Convert a single JSON object into a one-row DataFrame.
+///
+/// The object is wrapped in a JSON array and read via the JSON reader so column
+/// dtypes are inferred the same way as the rest of the sample-ingest path.
+///
+/// # Arguments
+///
+/// * `sample` - A JSON object (map of attribute -> value) representing one sample.
+///
+/// # Returns
+///
+/// A one-row `DataFrame`, or an error if `sample` is not a JSON object or cannot
+/// be parsed into a DataFrame.
+pub fn json_object_to_dataframe(sample: &Value) -> Result<DataFrame, Error> {
+    if !sample.is_object() {
+        return Err(Error::invalid_format(
+            "A sample must be a JSON object (map of attribute -> value)",
+        ));
+    }
+    let arr = Value::Array(vec![sample.clone()]);
+    let json_str = arr.to_string();
+    JsonReader::new(Cursor::new(json_str.into_bytes()))
+        .finish()
+        .map_err(|e| Error::config(format!("Failed to convert sample JSON to DataFrame: {e}")))
+}
+
 /// Read a YAML file containing sample data and convert it to a DataFrame.
 /// Supports both list-of-dicts and dict-of-lists YAML structures.
 pub fn resolve_yaml_to_dataframe(path: &Path) -> Result<DataFrame, Error> {

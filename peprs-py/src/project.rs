@@ -714,6 +714,29 @@ impl PyProject {
     }
 
     ///
+    /// Add a new sample to the project's raw sample table.
+    ///
+    /// # Arguments
+    ///
+    /// * `sample` - A dict (attribute name -> value) describing the new sample.
+    ///
+    /// Appends one row to the raw sample table. The processed sample table is
+    /// left unchanged; call [`reprocess`](Self::reprocess) afterward to fold the
+    /// new sample into the processed output.
+    ///
+    /// # Errors
+    ///
+    /// Raises `ValueError` if `sample` is not a mapping, and `RuntimeError` if
+    /// its index value (e.g. `sample_name`) already exists in the raw table.
+    ///
+    pub fn add_sample(&mut self, sample: &Bound<'_, PyAny>) -> PyResult<()> {
+        let value: Value =
+            depythonize(sample).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        self.inner.add_sample(value).map_err(PeprsCoreError::from)?;
+        Ok(())
+    }
+
+    ///
     /// Get a [`PySamplesIter`] over the project's processed samples.
     ///
     /// # Returns
