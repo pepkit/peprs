@@ -1039,6 +1039,17 @@ impl Project {
                     for rule in imply_rules {
                         let schema = new_lf.collect_schema()?;
 
+                        // If any column referenced by the `if` condition is
+                        // missing from the table, no sample can match, so skip
+                        // the rule entirely.
+                        if rule
+                            .if_condition
+                            .keys()
+                            .any(|attr_name| !schema.contains(attr_name.as_str()))
+                        {
+                            continue;
+                        }
+
                         let mut condition: Option<Expr> = None;
                         for (attr_name, imply_condition) in &rule.if_condition {
                             let col_as_str = col(attr_name).cast(DataType::String);
@@ -1595,6 +1606,11 @@ mod tests {
     }
 
     #[fixture]
+    fn imply_missing_col_pep() -> &'static str {
+        "../example-peps/example_imply_missing_col/project_config.yaml"
+    }
+
+    #[fixture]
     fn derive_pep() -> &'static str {
         "../example-peps/example_derive/project_config.yaml"
     }
@@ -1631,6 +1647,7 @@ mod tests {
     #[case("../example-peps/example_duplicate/project_config.yaml")]
     #[case("../example-peps/example_append/project_config.yaml")]
     #[case("../example-peps/example_imply/project_config.yaml")]
+    #[case("../example-peps/example_imply_missing_col/project_config.yaml")]
     #[case("../example-peps/example_derive/project_config.yaml")]
     #[case("../example-peps/example_imports/project_config.yaml")]
     #[case("../example-peps/example_amendments1/project_config.yaml")]
@@ -1719,6 +1736,31 @@ mod tests {
         assert_eq!(proj.is_ok(), true);
 
         println!("{:?}", proj.unwrap().samples);
+    }
+
+    /// Regression test for issue #55: an imply rule whose `if` column is
+    /// missing from the sample table must be skipped, not raise an error.
+    #[rstest]
+    fn imply_missing_if_column(imply_missing_col_pep: &'static str) {
+        let proj = Project::from_config(imply_missing_col_pep).build();
+        assert_eq!(proj.is_ok(), true);
+
+        let samples = proj.unwrap().samples;
+        // the `organism` column referenced by `if` never gets created
+        let cols = samples.get_column_names();
+        assert_eq!(cols, &["sample_name", "protocol", "genome"]);
+
+        // genome is left untouched since the rule matched no samples
+        let genomes: Vec<String> = samples
+            .column("genome")
+            .unwrap()
+            .str()
+            .unwrap()
+            .iter()
+            .flatten()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(genomes, vec!["hg38", "hg38"]);
     }
 
     #[rstest]

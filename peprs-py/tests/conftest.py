@@ -15,6 +15,7 @@ EXAMPLE_TYPES = [
     "amendments1",
     "amendments2",
     "derive_imply",
+    "imply_missing_col",
     "duplicate",
     "imports",
     "subtable1",

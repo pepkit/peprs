@@ -26,6 +26,16 @@ class TestSampleModifiers:
             elif s["organism"] == "mouse":
                 assert s["genome"] == "mm10"
 
+    @pytest.mark.parametrize(
+        "example_pep_cfg_path", ["imply_missing_col"], indirect=True
+    )
+    def test_imply_missing_if_column(self, example_pep_cfg_path):
+        """An imply rule whose `if` column is absent is skipped, not an error."""
+        p = Project(example_pep_cfg_path)  # must not raise
+        # genome is left as-is; the rule cannot match any sample
+        assert all(s["genome"] == "hg38" for s in p.samples)
+        assert all("organism" not in s for s in p.samples)
+
     @pytest.mark.parametrize("example_pep_cfg_path", ["duplicate"], indirect=True)
     def test_duplicate(self, example_pep_cfg_path):
         """Verify that the duplicated attribute equals the original."""
