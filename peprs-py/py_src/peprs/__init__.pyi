@@ -1,3 +1,4 @@
+import os
 from typing import Any, Dict, List, Mapping, Optional, Union, Iterator
 
 from polars import DataFrame as PolarsDataFrame
@@ -112,17 +113,18 @@ class Project:
 
     def __init__(
         self,
-        path: str,
+        path: Union[str, os.PathLike],
         amendments: Optional[List[str]] = None,
         sample_table_index: Optional[str] = None,
         subsample_table_index: Optional[List[str]] = None,
     ) -> None:
         """
         Create a new Project from a YAML config, CSV file path, or PEPhub registry path.
-        PEPhub registry path is 
+        PEPhub registry path is
 
         :param path: path to a .yaml/.yml config, a .csv sample table, or a
-            PEPHub registry path
+            PEPHub registry path. Accepts a ``str`` or any ``os.PathLike``
+            (e.g. ``pathlib.Path``)
         :param amendments: list of amendment names to activate
         :param sample_table_index: column name to use as the sample index
         :param subsample_table_index: column names for subsample table indices

@@ -41,7 +41,8 @@ impl PyProject {
     /// # Arguments
     ///
     /// * `path` - Path to a `.yaml`/`.yml` config, a `.csv` sample table, or a
-    ///   PepHub registry path.
+    ///   PepHub registry path. Accepts a `str` or any `os.PathLike` (e.g.
+    ///   `pathlib.Path`).
     ///
     /// # Returns
     ///
@@ -51,17 +52,18 @@ impl PyProject {
     #[new]
     #[pyo3(signature = (path, amendments=None, sample_table_index=None, subsample_table_index=None))]
     pub fn py_new(
-        path: String,
+        path: PathBuf,
         amendments: Option<Vec<String>>,
         sample_table_index: Option<String>,
         subsample_table_index: Option<Vec<String>>,
     ) -> Result<Self, PeprsCoreError> {
-        let mut builder = if path.ends_with(".yaml") || path.ends_with(".yml") {
+        let path_str = path.to_string_lossy();
+        let mut builder = if path_str.ends_with(".yaml") || path_str.ends_with(".yml") {
             Project::from_config(&path)
-        } else if path.ends_with(".csv") {
+        } else if path_str.ends_with(".csv") {
             Project::from_csv(&path)?
         } else {
-            return load_from_pephub(&path).map_err(|_| {
+            return load_from_pephub(&path_str).map_err(|_| {
                 PeprsCoreError::from(peprs_core::error::Error::InvalidFormat(
                     "Input file must be yaml, csv, or PEPhub path.".to_string(),
                 ))

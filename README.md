@@ -102,38 +102,79 @@ pip install peprs
 
 ## 🐍 Quick Python example
 
+### Load a project
+
 ```python
 import peprs
 
 # Load a PEP from a YAML config file
 project = peprs.Project("path/to/project_config.yaml")
-# or
+# or pull it straight from PEPHub
 project = peprs.Project.from_pephub("databio/example:default")
+```
 
-# Inspect the project
+### Inspect the project
+
+```python
 print(project.name)
 print(project.description)
 print(len(project))  # number of samples
+```
 
-# Get samples as a Polars DataFrame
-df_pl = project.to_polars()
-print(df_pl)
+### Work with samples
 
-# Get samples as a Pandas DataFrame
-df_pd = project.to_pandas()
-print(df_pd)
-
+```python
 # Look up a single sample by name
 sample = project.get_sample("3-1_11102016")
 
 # Iterate over samples
 for sample in project.samples:
     print(sample)
+```
 
-# Convert projects
+### Convert to a DataFrame
+
+```python
+# Polars
+df_pl = project.to_polars()
+print(df_pl)
+
+# Pandas
+df_pd = project.to_pandas()
+print(df_pd)
+```
+
+### Export the project to specific format
+
+```python
 project.write_csv("output.csv")
 project.write_yaml("output.yaml")
 project.write_json("output.json")
+```
+
+### ✅ Validate a project with a Pydantic model
+
+Define the expected shape of your project as a [Pydantic](https://docs.pydantic.dev/) model and let `peprs` validate against it:
+
+```python
+import peprs
+from peprs.eido import validate_with_pydantic
+from pydantic import BaseModel
+
+# Describe the attributes every sample must have
+class Sample(BaseModel):
+    sample_name: str
+    protocol: str
+    file: str
+
+project = peprs.Project("path/to/project_config.yaml")
+
+# Raises EidoValidationError if any sample doesn't match the model
+try:
+    validate_with_pydantic(project, sample_model=Sample)
+    print("Project is valid! 🎉")
+except Exception as e:
+    print(f"{e}")
 ```
 
 ## Benchmarks
