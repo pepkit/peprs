@@ -93,7 +93,7 @@ class Project:
     """Iterator over processed samples. Each element is a ``Sample`` object."""
 
     sample_table: PandasDataFrame
-    """Deprecated ``peppy``-compatible alias for :meth:`to_pandas`.
+    """!Deprecated ``peppy``-compatible alias for :meth:`to_pandas`.
 
     Processed sample table as a Pandas DataFrame indexed by the sample-name
     column (default ``sample_name``), kept as a column too, so both
@@ -307,6 +307,13 @@ class Project:
 
     def add_sample(self, sample: Mapping[str, Any]) -> None:
         """Add a new sample to the project's raw sample table.
+
+        .. warning::
+            !! This method is unoptimized and errors can occur,use with
+            caution.
+            It only updates the raw sample table; the processed sample
+            table is left stale until you call :meth:`reprocess`.
+
 
         Appends one row to the raw sample table. The processed sample table is
         left unchanged; call :meth:`reprocess` afterward to fold the new sample

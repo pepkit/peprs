@@ -716,6 +716,10 @@ impl PyProject {
     ///
     /// Add a new sample to the project's raw sample table.
     ///
+    /// **Warning:** this method is unoptimized and errors can occur, so use with
+    /// caution. It only updates the raw sample table; the processed sample table
+    /// is left stale until you call [`reprocess`](Self::reprocess).
+    ///
     /// # Arguments
     ///
     /// * `sample` - A dict (attribute name -> value) describing the new sample.
