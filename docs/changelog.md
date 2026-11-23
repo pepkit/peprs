@@ -2,7 +2,7 @@
 
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) format.
 
-## [0.2.5] - 2026-11-23
+## [0.3.0] - 2026-11-23
 ### Added:
 - `Project(path)` now falls back to loading `path` as a PEPHub registry (e.g. `"namespace/name:tag"`) when it is not a local YAML/CSV file.
 - `Project.add_sample()`: append a single sample to the raw sample table (call `reprocess()` afterward to update processed samples).
