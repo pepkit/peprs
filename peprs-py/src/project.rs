@@ -682,8 +682,7 @@ impl PyProject {
     /// its index value (e.g. `sample_name`) already exists in the raw table.
     ///
     pub fn add_sample(&mut self, sample: &Bound<'_, PyAny>) -> PyResult<()> {
-        let value: Value =
-            depythonize(sample).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let value: Value = depythonize(sample).map_err(|e| PyValueError::new_err(e.to_string()))?;
         self.inner.add_sample(value).map_err(PeprsCoreError::from)?;
         Ok(())
     }

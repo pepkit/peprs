@@ -1200,8 +1200,10 @@ impl Project {
 
         // columns new to the project -> append in the raw table's new order,
         // casting the new row's column to its own inferred dtype (keeps it as-is)
-        let mut existing_exprs: Vec<Expr> =
-            existing_schema.iter_names().map(|n| col(n.clone())).collect();
+        let mut existing_exprs: Vec<Expr> = existing_schema
+            .iter_names()
+            .map(|n| col(n.clone()))
+            .collect();
         for (name, dtype) in new_schema.iter() {
             if existing_schema.get(name.as_str()).is_none() {
                 existing_exprs.push(lit(NULL).cast(dtype.clone()).alias(name.clone()));
@@ -1217,12 +1219,16 @@ impl Project {
             .lazy()
             .select(existing_exprs)
             .collect()?;
-        let aligned_new = new_row.lazy().select(new_row_exprs).collect().map_err(|e| {
-            Error::Processing(format!(
-                "Failed to align new sample to the raw sample table schema \
+        let aligned_new = new_row
+            .lazy()
+            .select(new_row_exprs)
+            .collect()
+            .map_err(|e| {
+                Error::Processing(format!(
+                    "Failed to align new sample to the raw sample table schema \
                  (incompatible column type?): {e}"
-            ))
-        })?;
+                ))
+            })?;
 
         let mut combined = aligned_existing;
         combined.vstack_mut(&aligned_new)?;
@@ -2270,7 +2276,11 @@ mod tests {
         // the new column exists; pre-existing rows are null, the new row has the value
         let col = proj.samples_raw.column("new_attr").unwrap();
         assert_eq!(col.len(), proj.samples_raw.height());
-        let last = col.str().unwrap().get(proj.samples_raw.height() - 1).unwrap();
+        let last = col
+            .str()
+            .unwrap()
+            .get(proj.samples_raw.height() - 1)
+            .unwrap();
         assert_eq!(last, "hello");
         assert!(col.str().unwrap().get(0).is_none());
     }
@@ -2310,7 +2320,10 @@ mod tests {
     #[rstest]
     fn add_sample_rejects_non_object(basic_pep: &'static str) {
         let mut proj = Project::from_config(basic_pep).build().unwrap();
-        assert!(proj.add_sample(serde_json::json!(["not", "an", "object"])).is_err());
+        assert!(
+            proj.add_sample(serde_json::json!(["not", "an", "object"]))
+                .is_err()
+        );
         assert!(proj.add_sample(serde_json::json!("scalar")).is_err());
     }
 }
