@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional, Union, Iterator
+from typing import Any, Dict, List, Mapping, Optional, Union, Iterator
 
 from polars import DataFrame as PolarsDataFrame
 from pandas import DataFrame as PandasDataFrame
@@ -78,14 +78,22 @@ class Project:
     sample_name_colname: str
     """Column name used as the sample table index (default: "sample_name")."""
 
-    config: Optional[Dict[str, Any]]
-    """Raw project configuration as a dictionary, or None if no config exists."""
+    config: "Config"
+    """Live, mutable view of the project configuration.
+
+    Returns a :class:`Config` mapping backed by this project. Item assignment
+    (``project.config["key"] = value``) mutates the project's config in place and
+    persists across accesses. Assigning a whole dict (``project.config = {...}``)
+    replaces the config. Editing structural keys (e.g. ``sample_modifiers``)
+    updates the saved config immediately; call :meth:`reprocess` to apply them to
+    the processed sample table.
+    """
 
     samples: SamplesIter
     """Iterator over processed samples. Each element is a ``Sample`` object."""
 
     sample_table: PandasDataFrame
-    """Deprecated ``peppy``-compatible alias for :meth:`to_pandas`.
+    """!Deprecated ``peppy``-compatible alias for :meth:`to_pandas`.
 
     Processed sample table as a Pandas DataFrame indexed by the sample-name
     column (default ``sample_name``), kept as a column too, so both
@@ -109,9 +117,12 @@ class Project:
         sample_table_index: Optional[str] = None,
         subsample_table_index: Optional[List[str]] = None,
     ) -> None:
-        """Create a new Project from a YAML config or CSV file path.
+        """
+        Create a new Project from a YAML config, CSV file path, or PEPhub registry path.
+        PEPhub registry path is 
 
-        :param path: path to a .yaml/.yml config or .csv sample table
+        :param path: path to a .yaml/.yml config, a .csv sample table, or a
+            PEPHub registry path
         :param amendments: list of amendment names to activate
         :param sample_table_index: column name to use as the sample index
         :param subsample_table_index: column names for subsample table indices
@@ -290,9 +301,33 @@ class Project:
 
         Recomputes the processed sample table by re-applying the config's sample
         modifiers and subsample merge to the in-memory raw samples/subsamples.
-        Does **not** read anything from disk.
+        Does **not** read anything from disk. Call this after mutating
+        :attr:`config` so the processed samples reflect the changes.
 
         :raises ValueError: if the project has no config
+        """
+        ...
+
+    def add_sample(self, sample: Mapping[str, Any]) -> None:
+        """Add a new sample to the project's raw sample table.
+
+        .. warning::
+            !! This method is unoptimized and errors can occur,use with
+            caution.
+            It only updates the raw sample table; the processed sample
+            table is left stale until you call :meth:`reprocess`.
+
+
+        Appends one row to the raw sample table. The processed sample table is
+        left unchanged; call :meth:`reprocess` afterward to fold the new sample
+        into the processed output. Columns new to the project are added (existing
+        rows become null); columns omitted from ``sample`` are null for the new
+        row.
+
+        :param sample: a mapping of attribute name to value describing the sample
+        :raises ValueError: if ``sample`` is not a mapping
+        :raises RuntimeError: if the sample's index value (e.g. ``sample_name``)
+            already exists in the raw sample table
         """
         ...
 
@@ -302,6 +337,65 @@ class Project:
 
     def __len__(self) -> int: ...
     def __repr__(self) -> str: ...
+
+
+class Config:
+    """A live, mutable mapping view over a :class:`Project`'s configuration.
+
+    Reads go through the owning project and writes mutate its config in place, so
+    changes persist across accesses and are written out by
+    :meth:`Project.write_raw` and ``Project.to_dict(raw=True)``. Editing
+    structural keys (e.g. ``sample_modifiers``) updates the saved config
+    immediately; call :meth:`Project.reprocess` to apply them to the processed
+    sample table.
+    """
+
+    def __getitem__(self, key: str) -> Any:
+        """Get a config value by key.
+
+        :raises KeyError: if the key is not present
+        """
+        ...
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        """Set a config value, mutating the owning project's config in place."""
+        ...
+
+    def __delitem__(self, key: str) -> None:
+        """Remove a config key.
+
+        :raises KeyError: if the key is not present
+        """
+        ...
+
+    def __contains__(self, key: str) -> bool: ...
+    def __len__(self) -> int: ...
+    def __iter__(self) -> Iterator[str]: ...
+    def __repr__(self) -> str: ...
+
+    def keys(self) -> List[str]:
+        """Return the config's top-level keys."""
+        ...
+
+    def values(self) -> List[Any]:
+        """Return the config's top-level values."""
+        ...
+
+    def items(self) -> List[tuple[str, Any]]:
+        """Return the config's top-level (key, value) pairs."""
+        ...
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Get a config value, returning *default* if the key is absent."""
+        ...
+
+    def update(self, other: Dict[str, Any]) -> None:
+        """Merge the key/value pairs from *other* into the config."""
+        ...
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a plain (non-live) ``dict`` copy of the config."""
+        ...
 
 
 class SamplesIter:

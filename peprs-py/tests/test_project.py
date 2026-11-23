@@ -83,10 +83,14 @@ class TestProjectConstructor:
 
     @pytest.mark.parametrize("example_pep_cfg_path", ["basic"], indirect=True)
     def test_config_property(self, example_pep_cfg_path):
-        """Verify config property returns a dict."""
+        """Verify config property returns a dict-like Config mapping."""
+        from peprs import Config
+
         p = Project(example_pep_cfg_path)
         config = p.config
-        assert isinstance(config, dict)
+        assert isinstance(config, Config)
+        assert "pep_version" in config
+        assert isinstance(config.to_dict(), dict)
 
     @pytest.mark.parametrize("example_pep_cfg_path", EXAMPLE_TYPES, indirect=True)
     def test_len(self, example_pep_cfg_path):
@@ -150,6 +154,73 @@ class TestReprocess:
         p.reprocess()  # would fail if it re-read the deleted CSV
         assert len(p) == n
 
+
+class TestConfigMutation:
+    @pytest.mark.parametrize("example_pep_cfg_path", ["basic"], indirect=True)
+    def test_item_assignment_persists(self, example_pep_cfg_path):
+        """Verify config item assignment survives re-reading the property."""
+        p = Project(example_pep_cfg_path)
+        p.config["something"] = "nothing"
+        assert p.config["something"] == "nothing"
+
+    @pytest.mark.parametrize("example_pep_cfg_path", ["basic"], indirect=True)
+    def test_missing_key_raises(self, example_pep_cfg_path):
+        """Verify KeyError for a missing config key."""
+        p = Project(example_pep_cfg_path)
+        with pytest.raises(KeyError):
+            _ = p.config["definitely_not_a_key"]
+
+    @pytest.mark.parametrize("example_pep_cfg_path", ["basic"], indirect=True)
+    def test_name_key_syncs_typed_field(self, example_pep_cfg_path):
+        """Verify writing the 'name' key keeps Project.name in sync."""
+        p = Project(example_pep_cfg_path)
+        p.config["name"] = "renamed"
+        assert p.name == "renamed"
+        assert p.config["name"] == "renamed"
+
+    @pytest.mark.parametrize("example_pep_cfg_path", ["basic"], indirect=True)
+    def test_update_and_delete(self, example_pep_cfg_path):
+        """Verify update() merges keys and del removes them."""
+        p = Project(example_pep_cfg_path)
+        p.config.update({"a": 1, "b": 2})
+        assert p.config["a"] == 1 and p.config["b"] == 2
+        del p.config["a"]
+        assert "a" not in p.config
+        with pytest.raises(KeyError):
+            del p.config["a"]
+
+    @pytest.mark.parametrize("example_pep_cfg_path", ["basic"], indirect=True)
+    def test_get_keys_values_items_iter(self, example_pep_cfg_path):
+        """Verify the mapping helpers behave dict-like."""
+        p = Project(example_pep_cfg_path)
+        assert p.config.get("nope", "default") == "default"
+        assert p.config.get("nope") is None
+        assert "pep_version" in p.config.keys()
+        assert len(p.config.values()) == len(p.config)
+        assert dict(p.config.items())["pep_version"] == p.pep_version
+        assert set(iter(p.config)) == set(p.config.keys())
+
+    @pytest.mark.parametrize("example_pep_cfg_path", ["basic"], indirect=True)
+    def test_whole_dict_setter(self, example_pep_cfg_path):
+        """Verify assigning a dict to .config replaces the config."""
+        p = Project(example_pep_cfg_path)
+        p.config = {"pep_version": "2.1.0", "name": "brand_new"}
+        assert p.name == "brand_new"
+        assert p.config["pep_version"] == "2.1.0"
+
+    @pytest.mark.parametrize("example_pep_cfg_path", ["basic"], indirect=True)
+    def test_config_edit_is_saved(self, tmp_path, example_pep_cfg_path):
+        """Verify edited config is written out by write_raw."""
+        import yaml
+
+        p = Project(example_pep_cfg_path)
+        p.config["something"] = "nothing"
+        p.config["name"] = "saved_name"
+        out = tmp_path / "out"
+        p.write_raw(str(out))
+        saved = yaml.safe_load((out / "project_config.yaml").read_text())
+        assert saved["something"] == "nothing"
+        assert saved["name"] == "saved_name"
 
 class TestSampleAccess:
     @pytest.mark.parametrize("example_pep_cfg_path", ["basic"], indirect=True)
@@ -372,3 +443,35 @@ class TestAlternativeConstructors:
         p2 = Project(csv_path)
         assert p1 != p2
         assert (p1 == p2) == False
+
+
+class TestAddSample:
+    @pytest.mark.parametrize("example_pep_cfg_path", ["basic"], indirect=True)
+    def test_add_sample_raw_only(self, example_pep_cfg_path):
+        """add_sample grows the raw table but leaves processed samples untouched."""
+        p = Project(example_pep_cfg_path)
+        raw_before = len(p.to_polars(raw=True))
+        processed_before = len(p.to_polars())
+
+        p.add_sample({"sample_name": "frog_3", "protocol": "anySampleType", "file": "data/frog3.txt"})
+
+        assert len(p.to_polars(raw=True)) == raw_before + 1
+        assert len(p.to_polars()) == processed_before
+
+    @pytest.mark.parametrize("example_pep_cfg_path", ["basic"], indirect=True)
+    def test_add_sample_then_reprocess(self, example_pep_cfg_path):
+        """reprocess folds a newly added sample into the processed table."""
+        p = Project(example_pep_cfg_path)
+        processed_before = len(p.to_polars())
+
+        p.add_sample({"sample_name": "frog_3", "protocol": "anySampleType", "file": "data/frog3.txt"})
+        p.reprocess()
+
+        assert len(p.to_polars()) == processed_before + 1
+
+    @pytest.mark.parametrize("example_pep_cfg_path", ["basic"], indirect=True)
+    def test_add_sample_rejects_duplicate(self, example_pep_cfg_path):
+        """Adding a sample whose sample_name already exists raises."""
+        p = Project(example_pep_cfg_path)
+        with pytest.raises(Exception):
+            p.add_sample({"sample_name": "frog_1", "protocol": "anySampleType"})
