@@ -117,9 +117,12 @@ class Project:
         sample_table_index: Optional[str] = None,
         subsample_table_index: Optional[List[str]] = None,
     ) -> None:
-        """Create a new Project from a YAML config or CSV file path.
+        """
+        Create a new Project from a YAML config, CSV file path, or PEPhub registry path.
+        PEPhub registry path is 
 
-        :param path: path to a .yaml/.yml config or .csv sample table
+        :param path: path to a .yaml/.yml config, a .csv sample table, or a
+            PEPHub registry path
         :param amendments: list of amendment names to activate
         :param sample_table_index: column name to use as the sample index
         :param subsample_table_index: column names for subsample table indices
