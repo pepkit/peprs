@@ -102,6 +102,8 @@ pip install peprs
 
 ## 🐍 Quick Python example
 
+> 💡 Ready-to-run example PEPs live in [`example-peps/`](example-peps/) and example eido schemas live in [`example_schemas/`](example_schemas/). The snippets below use placeholder paths -> swap in a file from those folders (paths or urls) to try them out.
+
 ### Load a project
 
 ```python
@@ -175,6 +177,66 @@ try:
     print("Project is valid! 🎉")
 except Exception as e:
     print(f"{e}")
+```
+
+### ✅ Validate a project with a YAML schema
+
+You can also validate against an [eido](https://pep.databio.org/eido/)-style schema stored as a YAML file. The schema describes the attributes each sample must have and which ones are required — see [`example_schemas/sample_schema.yaml`](example_schemas/sample_schema.yaml) for a ready-to-use example.
+
+Point `validate_project` at the schema file:
+
+```python
+import peprs
+from peprs.eido import validate_project
+
+project = peprs.Project("path/to/project_config.yaml")
+
+# Raises EidoValidationError if any sample doesn't match the schema
+try:
+    validate_project(project, schema="example_schemas/sample_schema.yaml")
+    print("Project is valid! 🎉")
+except Exception as e:
+    print(f"{e}")
+```
+
+## 🖥️ CLI examples
+
+Once the [`peprs` CLI](#cli) is installed, you can work with PEPs straight from the terminal.
+
+### Inspect a PEP
+
+Print a summary of a project and its samples:
+
+```bash
+peprs inspect path/to/project_config.yaml
+```
+
+Inspect a single sample by name:
+
+```bash
+peprs inspect path/to/project_config.yaml --sample-name 3-1_11102016
+```
+
+### Validate a PEP against a schema
+
+Validate a project config against an eido schema file (YAML or JSON):
+
+```bash
+peprs validate path/to/project_config.yaml --schema example_schemas/sample_schema.yaml
+```
+
+### Log in to PEPHub
+
+Authenticate so you can pull and push private projects. Running `login` with no arguments starts an interactive browser-based login:
+
+```bash
+peprs client login
+```
+
+Or register a token generated in your PEPHub account directly:
+
+```bash
+peprs client login --token <YOUR_PEPHUB_TOKEN>
 ```
 
 ## Benchmarks
