@@ -1,0 +1,18 @@
+description: An example schema for a PEP
+properties:
+  samples:
+    type: array
+    items:
+      type: object
+      properties:
+        sample_name:
+          type: string
+        protocol:
+          type: string
+        genome:
+          type: string
+      required:
+        - sample_name
+        - genome
+required:
+  - samples
