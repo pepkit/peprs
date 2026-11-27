@@ -30,7 +30,7 @@ jobs:
             - name: Build bindings and prepare for publish (rename package)
               run: |
                 wasm-pack build --release --target web peprs-wasm
-                jq '.name = "@databio/peprs" | .repository = {"type": "git", "url": "https://github.com/khoroshevskyi/peprs"}' peprs-wasm/pkg/package.json > tmp.json && mv tmp.json peprs-wasm/pkg/package.json
+                jq --arg repo "git+${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" '.name = "@databio/peprs" | .repository = {"type": "git", "url": $repo}' peprs-wasm/pkg/package.json > tmp.json && mv tmp.json peprs-wasm/pkg/package.json
             - name: Publish to NPM
               run: |
                 npm publish --provenance --access public peprs-wasm/pkg/
