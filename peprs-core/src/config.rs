@@ -21,6 +21,27 @@ where
     }))
 }
 
+///
+/// Normalize a `subsample_table_index` JSON value that may be a single string
+/// or a sequence of strings into `Option<Vec<String>>`.
+///
+/// # Arguments
+///
+/// * `value` - The JSON value to normalize.
+///
+/// # Returns
+///
+/// `Some(Vec<String>)` for a string or list, `None` for JSON null, or an error
+/// if the value is neither.
+///
+fn normalize_subsample_table_index(value: Value) -> Result<Option<Vec<String>>> {
+    let opt: Option<SubsampleTableIndex> = serde_json::from_value(value)?;
+    Ok(opt.map(|val| match val {
+        SubsampleTableIndex::Single(s) => vec![s],
+        SubsampleTableIndex::Multiple(v) => v,
+    }))
+}
+
 use crate::consts::DEFAULT_PEP_VERSION;
 
 ///
@@ -270,6 +291,86 @@ impl ProjectConfig {
             serde_yaml::to_writer(file, &config)?;
         }
         Ok(())
+    }
+
+    ///
+    /// Set a top-level config field from a JSON value.
+    ///
+    /// Updates the `raw` config map (the source of truth for serialization) and
+    /// mirrors known structural keys into their typed fields, so a subsequent
+    /// [`Project::reprocess`](crate::project::Project::reprocess) honors the
+    /// change. Unknown keys are stored in `raw` only.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - Top-level config key.
+    /// * `value` - New JSON value for the key.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` on success, or an error if the value cannot be parsed into the
+    /// corresponding typed field.
+    ///
+    pub fn set_raw_field(&mut self, key: &str, value: Value) -> Result<()> {
+        // ensure `raw` exists as a JSON object
+        if !matches!(self.raw, Some(Value::Object(_))) {
+            self.raw = Some(Value::Object(serde_json::Map::new()));
+        }
+
+        // mirror known structural keys into their typed fields so that
+        // reprocessing honors edits made through this method
+        match key {
+            "pep_version" => {
+                if let Some(version) = serde_json::from_value::<Option<String>>(value.clone())? {
+                    self.pep_version = version;
+                }
+            }
+            "name" => self.name = serde_json::from_value(value.clone())?,
+            "description" => self.description = serde_json::from_value(value.clone())?,
+            "sample_table" => self.sample_table = serde_json::from_value(value.clone())?,
+            "subsample_table" => self.subsample_table = serde_json::from_value(value.clone())?,
+            "sample_table_index" => {
+                self.sample_table_index = serde_json::from_value(value.clone())?
+            }
+            "subsample_table_index" => {
+                self.subsample_table_index = normalize_subsample_table_index(value.clone())?;
+            }
+            "sample_modifiers" => self.sample_modifiers = serde_json::from_value(value.clone())?,
+            "project_modifiers" => self.project_modifiers = serde_json::from_value(value.clone())?,
+            _ => {}
+        }
+
+        if let Some(Value::Object(map)) = self.raw.as_mut() {
+            map.insert(key.to_string(), value);
+        }
+        Ok(())
+    }
+
+    ///
+    /// Remove a top-level config field.
+    ///
+    /// Removes the key from the `raw` config map and clears the corresponding
+    /// typed field for known structural keys.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - Top-level config key to remove.
+    ///
+    pub fn remove_raw_field(&mut self, key: &str) {
+        if let Some(Value::Object(map)) = self.raw.as_mut() {
+            map.remove(key);
+        }
+        match key {
+            "name" => self.name = None,
+            "description" => self.description = None,
+            "sample_table" => self.sample_table = None,
+            "subsample_table" => self.subsample_table = None,
+            "sample_table_index" => self.sample_table_index = None,
+            "subsample_table_index" => self.subsample_table_index = None,
+            "sample_modifiers" => self.sample_modifiers = None,
+            "project_modifiers" => self.project_modifiers = None,
+            _ => {}
+        }
     }
 }
 

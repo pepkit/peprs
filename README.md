@@ -102,38 +102,141 @@ pip install peprs
 
 ## 🐍 Quick Python example
 
+> 💡 Ready-to-run example PEPs live in [`example-peps/`](example-peps/) and example eido schemas live in [`example_schemas/`](example_schemas/). The snippets below use placeholder paths -> swap in a file from those folders (paths or urls) to try them out.
+
+### Load a project
+
 ```python
 import peprs
 
 # Load a PEP from a YAML config file
 project = peprs.Project("path/to/project_config.yaml")
-# or
+# or pull it straight from PEPHub
 project = peprs.Project.from_pephub("databio/example:default")
+```
 
-# Inspect the project
+### Inspect the project
+
+```python
 print(project.name)
 print(project.description)
 print(len(project))  # number of samples
+```
 
-# Get samples as a Polars DataFrame
-df_pl = project.to_polars()
-print(df_pl)
+### Work with samples
 
-# Get samples as a Pandas DataFrame
-df_pd = project.to_pandas()
-print(df_pd)
-
+```python
 # Look up a single sample by name
 sample = project.get_sample("3-1_11102016")
 
 # Iterate over samples
 for sample in project.samples:
     print(sample)
+```
 
-# Convert projects
+### Convert to a DataFrame
+
+```python
+# Polars
+df_pl = project.to_polars()
+print(df_pl)
+
+# Pandas
+df_pd = project.to_pandas()
+print(df_pd)
+```
+
+### Export the project to specific format
+
+```python
 project.write_csv("output.csv")
 project.write_yaml("output.yaml")
 project.write_json("output.json")
+```
+
+### ✅ Validate a project with a Pydantic model
+
+Define the expected shape of your project as a [Pydantic](https://docs.pydantic.dev/) model and let `peprs` validate against it:
+
+```python
+import peprs
+from peprs.eido import validate_with_pydantic
+from pydantic import BaseModel
+
+# Describe the attributes every sample must have
+class Sample(BaseModel):
+    sample_name: str
+    protocol: str
+    file: str
+
+project = peprs.Project("path/to/project_config.yaml")
+
+# Raises EidoValidationError if any sample doesn't match the model
+try:
+    validate_with_pydantic(project, sample_model=Sample)
+    print("Project is valid! 🎉")
+except Exception as e:
+    print(f"{e}")
+```
+
+### ✅ Validate a project with a YAML schema
+
+You can also validate against an [eido](https://pep.databio.org/eido/)-style schema stored as a YAML file. The schema describes the attributes each sample must have and which ones are required — see [`example_schemas/sample_schema.yaml`](example_schemas/sample_schema.yaml) for a ready-to-use example.
+
+Point `validate_project` at the schema file:
+
+```python
+import peprs
+from peprs.eido import validate_project
+
+project = peprs.Project("path/to/project_config.yaml")
+
+# Raises EidoValidationError if any sample doesn't match the schema
+try:
+    validate_project(project, schema="example_schemas/sample_schema.yaml")
+    print("Project is valid! 🎉")
+except Exception as e:
+    print(f"{e}")
+```
+
+## 🖥️ CLI examples
+
+Once the [`peprs` CLI](#cli) is installed, you can work with PEPs straight from the terminal.
+
+### Inspect a PEP
+
+Print a summary of a project and its samples:
+
+```bash
+peprs inspect path/to/project_config.yaml
+```
+
+Inspect a single sample by name:
+
+```bash
+peprs inspect path/to/project_config.yaml --sample-name 3-1_11102016
+```
+
+### Validate a PEP against a schema
+
+Validate a project config against an eido schema file (YAML or JSON):
+
+```bash
+peprs validate path/to/project_config.yaml --schema example_schemas/sample_schema.yaml
+```
+
+### Log in to PEPHub
+
+Authenticate so you can pull and push private projects. Running `login` with no arguments starts an interactive browser-based login:
+
+```bash
+peprs client login
+```
+
+Or register a token generated in your PEPHub account directly:
+
+```bash
+peprs client login --token <YOUR_PEPHUB_TOKEN>
 ```
 
 ## Benchmarks

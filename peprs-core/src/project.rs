@@ -17,8 +17,8 @@ use crate::sample::{Sample, SamplesIter};
 #[cfg(feature = "zip")]
 use crate::utils::write_raw_zip_parts;
 use crate::utils::{
-    build_derive_template_expr, extract_template_columns, resolve_csv_to_dataframe,
-    resolve_yaml_to_dataframe, write_raw_folder_parts,
+    build_derive_template_expr, extract_template_columns, json_object_to_dataframe,
+    resolve_csv_to_dataframe, resolve_yaml_to_dataframe, write_raw_folder_parts,
 };
 #[cfg(feature = "wdl")]
 use crate::wdl::WdlInputParsingOptions;
@@ -984,8 +984,8 @@ impl Project {
     /// table, producing the processed sample table.
     ///
     /// This is the shared processing pipeline used both when a project is first
-    /// built and when it is [reprocessed](Self::reprocess). It operates purely on
-    /// the in-memory arguments and never reads from disk.
+    /// built and when it is [reprocessed](Self::reprocess). It operates purely
+    /// on the in-memory arguments and never reads from disk.
     ///
     /// # Arguments
     ///
@@ -1038,6 +1038,17 @@ impl Project {
                 if let Some(imply_rules) = &modifiers.imply {
                     for rule in imply_rules {
                         let schema = new_lf.collect_schema()?;
+
+                        // If any column referenced by the `if` condition is
+                        // missing from the table, no sample can match, so skip
+                        // the rule entirely.
+                        if rule
+                            .if_condition
+                            .keys()
+                            .any(|attr_name| !schema.contains(attr_name.as_str()))
+                        {
+                            continue;
+                        }
 
                         let mut condition: Option<Expr> = None;
                         for (attr_name, imply_condition) in &rule.if_condition {
@@ -1128,13 +1139,124 @@ impl Project {
     }
 
     ///
+    /// Add a single new sample to the project's raw sample table.
+    ///
+    /// The sample is provided as a JSON object (a map of attribute name to
+    /// value) and appended as one new row to [`samples_raw`](Self::samples_raw).
+    /// Columns present in the sample but not yet in the raw table are added
+    /// (existing rows get null); columns missing from the sample are null for
+    /// the new row. Shared columns are cast to the raw table's existing dtype.
+    ///
+    /// The processed sample table ([`samples`](Self::samples)) is left
+    /// untouched. Call [`reprocess`](Self::reprocess) afterward to fold the new
+    /// sample into the processed output.
+    ///
+    /// # Arguments
+    ///
+    /// * `sample` - A JSON object representing the sample to add.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` on success. Returns an error if `sample` is not a JSON object,
+    /// if its index value (e.g. `sample_name`) already exists in the raw table,
+    /// or if a shared column cannot be cast to the existing dtype.
+    ///
+    pub fn add_sample(&mut self, sample: serde_json::Value) -> Result<(), Error> {
+        // reject a duplicate up front: if the sample carries the index key and
+        // that value already exists in the raw table, do not modify anything.
+        if let Some(index_value) = sample.get(&self.sample_table_index)
+            && let Ok(index_col) = self.samples_raw.column(&self.sample_table_index)
+        {
+            // compare as strings to stay dtype-agnostic
+            let needle = match index_value {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            let exists = index_col.as_series().is_some_and(|s| {
+                s.iter().any(|v| match v {
+                    AnyValue::String(existing) => existing == needle,
+                    AnyValue::StringOwned(existing) => existing.as_str() == needle,
+                    other => other.to_string() == needle,
+                })
+            });
+            if exists {
+                return Err(Error::Processing(format!(
+                    "A sample with {} = '{}' already exists in the raw sample table",
+                    self.sample_table_index, needle
+                )));
+            }
+        }
+
+        let new_row = json_object_to_dataframe(&sample)?;
+
+        // empty project: the new row becomes the whole raw table
+        if self.samples_raw.width() == 0 {
+            self.samples_raw = new_row;
+            return Ok(());
+        }
+
+        let existing_schema = self.samples_raw.schema().clone();
+        let new_schema = new_row.schema().clone();
+
+        // columns in the raw table but missing from the new sample -> typed null
+        let mut new_row_exprs: Vec<Expr> = Vec::new();
+        for (name, dtype) in existing_schema.iter() {
+            if new_schema.get(name.as_str()).is_some() {
+                // shared column: cast the new value to the raw table's dtype
+                new_row_exprs.push(col(name.clone()).cast(dtype.clone()).alias(name.clone()));
+            } else {
+                new_row_exprs.push(lit(NULL).cast(dtype.clone()).alias(name.clone()));
+            }
+        }
+
+        // columns new to the project -> append in the raw table's new order,
+        // casting the new row's column to its own inferred dtype (keeps it as-is)
+        let mut existing_exprs: Vec<Expr> = existing_schema
+            .iter_names()
+            .map(|n| col(n.clone()))
+            .collect();
+        for (name, dtype) in new_schema.iter() {
+            if existing_schema.get(name.as_str()).is_none() {
+                existing_exprs.push(lit(NULL).cast(dtype.clone()).alias(name.clone()));
+                new_row_exprs.push(col(name.clone()).alias(name.clone()));
+            }
+        }
+
+        // collect both frames with an identical schema (name + order + dtype),
+        // then stack. A failed cast on a shared column surfaces here.
+        let aligned_existing = self
+            .samples_raw
+            .clone()
+            .lazy()
+            .select(existing_exprs)
+            .collect()?;
+        let aligned_new = new_row
+            .lazy()
+            .select(new_row_exprs)
+            .collect()
+            .map_err(|e| {
+                Error::Processing(format!(
+                    "Failed to align new sample to the raw sample table schema \
+                 (incompatible column type?): {e}"
+                ))
+            })?;
+
+        let mut combined = aligned_existing;
+        combined.vstack_mut(&aligned_new)?;
+        self.samples_raw = combined;
+
+        Ok(())
+    }
+
+    ///
     /// Re-run the sample-processing pipeline using the current in-memory config
     /// and raw sample/subsample tables, without reading anything from disk.
     ///
     /// Recomputes [`samples`](Self::samples) from [`samples_raw`](Self::samples_raw)
     /// and [`subsamples`](Self::subsamples) by re-applying the config's sample
-    /// modifiers and subsample merge. Use this after changing the in-memory
-    /// config so the processed sample table reflects the changes.
+    /// modifiers and subsample merge. Use this after mutating the project config
+    /// in memory (e.g. via [`ProjectConfig::set_raw_field`]) so the processed
+    /// sample table reflects the changes.
     ///
     /// Note: this does not re-apply project modifiers (imports/amendments), which
     /// require disk access and are already baked into the loaded config.
@@ -1484,6 +1606,11 @@ mod tests {
     }
 
     #[fixture]
+    fn imply_missing_col_pep() -> &'static str {
+        "../example-peps/example_imply_missing_col/project_config.yaml"
+    }
+
+    #[fixture]
     fn derive_pep() -> &'static str {
         "../example-peps/example_derive/project_config.yaml"
     }
@@ -1520,6 +1647,7 @@ mod tests {
     #[case("../example-peps/example_duplicate/project_config.yaml")]
     #[case("../example-peps/example_append/project_config.yaml")]
     #[case("../example-peps/example_imply/project_config.yaml")]
+    #[case("../example-peps/example_imply_missing_col/project_config.yaml")]
     #[case("../example-peps/example_derive/project_config.yaml")]
     #[case("../example-peps/example_imports/project_config.yaml")]
     #[case("../example-peps/example_amendments1/project_config.yaml")]
@@ -1608,6 +1736,31 @@ mod tests {
         assert_eq!(proj.is_ok(), true);
 
         println!("{:?}", proj.unwrap().samples);
+    }
+
+    /// Regression test for issue #55: an imply rule whose `if` column is
+    /// missing from the sample table must be skipped, not raise an error.
+    #[rstest]
+    fn imply_missing_if_column(imply_missing_col_pep: &'static str) {
+        let proj = Project::from_config(imply_missing_col_pep).build();
+        assert_eq!(proj.is_ok(), true);
+
+        let samples = proj.unwrap().samples;
+        // the `organism` column referenced by `if` never gets created
+        let cols = samples.get_column_names();
+        assert_eq!(cols, &["sample_name", "protocol", "genome"]);
+
+        // genome is left untouched since the rule matched no samples
+        let genomes: Vec<String> = samples
+            .column("genome")
+            .unwrap()
+            .str()
+            .unwrap()
+            .iter()
+            .flatten()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(genomes, vec!["hg38", "hg38"]);
     }
 
     #[rstest]
@@ -2100,5 +2253,119 @@ mod tests {
     fn test_from_sample_yaml_nonexistent() {
         let result = Project::from_sample_yaml("nonexistent.yaml").build();
         assert!(result.is_err());
+    }
+
+    // --- add_sample tests ---
+
+    #[rstest]
+    fn add_sample_appends_raw_only(basic_pep: &'static str) {
+        let mut proj = Project::from_config(basic_pep).build().unwrap();
+        let raw_before = proj.samples_raw.height();
+        let processed_before = proj.samples.height();
+
+        proj.add_sample(serde_json::json!({
+            "sample_name": "frog_3",
+            "protocol": "anySampleType",
+            "file": "data/frog3_data.txt",
+        }))
+        .unwrap();
+
+        // raw grows by one; processed is untouched
+        assert_eq!(proj.samples_raw.height(), raw_before + 1);
+        assert_eq!(proj.samples.height(), processed_before);
+
+        // the new sample is discoverable in the raw table
+        let names: Vec<String> = proj
+            .samples_raw
+            .column("sample_name")
+            .unwrap()
+            .str()
+            .unwrap()
+            .iter()
+            .flatten()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(names.contains(&"frog_3".to_string()));
+    }
+
+    #[rstest]
+    fn add_sample_then_reprocess_reflects_it(basic_pep: &'static str) {
+        let mut proj = Project::from_config(basic_pep).build().unwrap();
+        let processed_before = proj.samples.height();
+
+        proj.add_sample(serde_json::json!({
+            "sample_name": "frog_3",
+            "protocol": "anySampleType",
+            "file": "data/frog3_data.txt",
+        }))
+        .unwrap();
+
+        proj.reprocess().unwrap();
+        assert_eq!(proj.samples.height(), processed_before + 1);
+    }
+
+    #[rstest]
+    fn add_sample_with_new_column(basic_pep: &'static str) {
+        let mut proj = Project::from_config(basic_pep).build().unwrap();
+        assert!(proj.samples_raw.column("new_attr").is_err());
+
+        proj.add_sample(serde_json::json!({
+            "sample_name": "frog_3",
+            "new_attr": "hello",
+        }))
+        .unwrap();
+
+        // the new column exists; pre-existing rows are null, the new row has the value
+        let col = proj.samples_raw.column("new_attr").unwrap();
+        assert_eq!(col.len(), proj.samples_raw.height());
+        let last = col
+            .str()
+            .unwrap()
+            .get(proj.samples_raw.height() - 1)
+            .unwrap();
+        assert_eq!(last, "hello");
+        assert!(col.str().unwrap().get(0).is_none());
+    }
+
+    #[rstest]
+    fn add_sample_with_missing_column(basic_pep: &'static str) {
+        let mut proj = Project::from_config(basic_pep).build().unwrap();
+
+        // omit the "file" column that the basic pep has
+        proj.add_sample(serde_json::json!({
+            "sample_name": "frog_3",
+            "protocol": "anySampleType",
+        }))
+        .unwrap();
+
+        let file_col = proj.samples_raw.column("file").unwrap();
+        // the new (last) row is null for the omitted column
+        assert!(file_col.get(proj.samples_raw.height() - 1).unwrap() == AnyValue::Null);
+    }
+
+    #[rstest]
+    fn add_sample_rejects_duplicate(basic_pep: &'static str) {
+        let mut proj = Project::from_config(basic_pep).build().unwrap();
+        let raw_before = proj.samples_raw.clone();
+
+        // frog_1 already exists in the basic pep
+        let result = proj.add_sample(serde_json::json!({
+            "sample_name": "frog_1",
+            "protocol": "anySampleType",
+        }));
+
+        assert!(result.is_err());
+        // raw table is unchanged on rejection
+        assert!(proj.samples_raw.equals_missing(&raw_before));
+    }
+
+    #[rstest]
+    fn add_sample_rejects_non_object(basic_pep: &'static str) {
+        let mut proj = Project::from_config(basic_pep).build().unwrap();
+        assert!(
+            proj.add_sample(serde_json::json!(["not", "an", "object"]))
+                .is_err()
+        );
+        assert!(proj.add_sample(serde_json::json!("scalar")).is_err());
     }
 }

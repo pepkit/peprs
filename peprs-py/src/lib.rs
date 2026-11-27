@@ -1,3 +1,4 @@
+pub mod config;
 pub mod eido;
 pub mod error;
 pub mod project;
@@ -6,6 +7,7 @@ pub mod utils;
 
 use pyo3::prelude::*;
 
+use config::PyConfig;
 use project::PyProject;
 use samples::PySample;
 
@@ -27,6 +29,7 @@ fn peprs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     init_tracing();
     m.add_class::<PyProject>()?;
     m.add_class::<PySample>()?;
+    m.add_class::<PyConfig>()?;
     m.add_function(wrap_pyfunction!(_cli_main, m)?)?;
     eido::register_eido_module(m)?;
     Ok(())

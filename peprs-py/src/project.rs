@@ -16,6 +16,7 @@ use pythonize::{depythonize, pythonize};
 use serde_json::Value;
 use std::io::Cursor;
 
+use crate::config::PyConfig;
 use crate::error::PeprsCoreError;
 use crate::samples::{sample_to_pysample, PySample, PySamplesIter};
 
@@ -32,32 +33,41 @@ impl PyProject {
     ///
     /// Create a new Project from a YAML config or CSV file path.
     ///
+    /// If `path` is neither a `.yaml`/`.yml` nor a `.csv` file, it is treated as
+    /// a PepHub registry path (e.g. `"namespace/name:tag"`) and loaded from
+    /// PepHub. If that also fails, the original unsupported-format error is
+    /// returned.
+    ///
     /// # Arguments
     ///
-    /// * `path` - Path to a `.yaml`/`.yml` config or `.csv` sample table.
+    /// * `path` - Path to a `.yaml`/`.yml` config, a `.csv` sample table, or a
+    ///   PepHub registry path. Accepts a `str` or any `os.PathLike` (e.g.
+    ///   `pathlib.Path`).
     ///
     /// # Returns
     ///
-    /// A new `PyProject`, or an error if the file format is unsupported.
+    /// A new `PyProject`, or an error if the file format is unsupported and the
+    /// path could not be loaded from PepHub.
     ///
     #[new]
     #[pyo3(signature = (path, amendments=None, sample_table_index=None, subsample_table_index=None))]
     pub fn py_new(
-        path: String,
+        path: PathBuf,
         amendments: Option<Vec<String>>,
         sample_table_index: Option<String>,
         subsample_table_index: Option<Vec<String>>,
     ) -> Result<Self, PeprsCoreError> {
-        let mut builder = if path.ends_with(".yaml") || path.ends_with(".yml") {
+        let path_str = path.to_string_lossy();
+        let mut builder = if path_str.ends_with(".yaml") || path_str.ends_with(".yml") {
             Project::from_config(&path)
-        } else if path.ends_with(".csv") {
+        } else if path_str.ends_with(".csv") {
             Project::from_csv(&path)?
         } else {
-            return Err(PeprsCoreError::from(
-                peprs_core::error::Error::InvalidFormat(
-                    "Input file must be csv or yaml".to_string(),
-                ),
-            ));
+            return load_from_pephub(&path_str).map_err(|_| {
+                PeprsCoreError::from(peprs_core::error::Error::InvalidFormat(
+                    "Input file must be yaml, csv, or PEPhub path.".to_string(),
+                ))
+            });
         };
 
         if let Some(ref amendments) = amendments {
@@ -239,66 +249,7 @@ impl PyProject {
     #[classmethod]
     #[pyo3(signature = (registry))]
     pub fn from_pephub(_cls: &Bound<'_, PyType>, registry: String) -> Result<Self, PeprsCoreError> {
-        let pephub = Api::new().map_err(|e| {
-            peprs_core::error::Error::Processing(format!("Failed to create PepHub client: {}", e))
-        })?;
-
-        // Fetch the full project JSON (config + samples + subsamples)
-        let raw = pephub.get_raw(registry.as_str()).map_err(|e| {
-            if e.status_code() == Some(404) {
-                peprs_core::error::Error::Processing(
-                    "Project not found or user is unauthorized".to_string(),
-                )
-            } else {
-                peprs_core::error::Error::Processing(format!("Failed to fetch from PepHub: {}", e))
-            }
-        })?;
-
-        let raw_value: Value =
-            serde_json::from_str(&raw).map_err(peprs_core::error::Error::Json)?;
-
-        // 1. Config
-        let config_value = raw_value
-            .get("config")
-            .ok_or_else(|| peprs_core::error::Error::invalid_format("Missing 'config' key"))?;
-        let mut config: ProjectConfig =
-            serde_json::from_value(config_value.clone()).map_err(peprs_core::error::Error::Json)?;
-        config.raw = Some(config_value.clone());
-
-        // 2. Samples
-        let samples_obj = raw_value
-            .get("samples") // TODO: change to samples
-            .ok_or_else(|| peprs_core::error::Error::invalid_format("Missing 'sample_list' key"))?;
-        let samples_bytes = samples_obj.to_string();
-        let samples_df = JsonReader::new(Cursor::new(samples_bytes.as_bytes()))
-            .finish()
-            .map_err(peprs_core::error::Error::Polars)?;
-
-        // 3. Subsamples
-        let subsamples = match raw_value.get("subsamples") {
-            // TODO: change to subsamples
-            Some(Value::Array(subs_list)) => {
-                let mut dfs = Vec::new();
-                for sub_item in subs_list {
-                    let sub_bytes = sub_item.to_string();
-                    let sub_df = JsonReader::new(Cursor::new(sub_bytes.as_bytes()))
-                        .finish()
-                        .map_err(peprs_core::error::Error::Polars)?;
-                    dfs.push(sub_df);
-                }
-                Some(dfs)
-            }
-            Some(Value::Null) | None => None,
-            _ => {
-                return Err(
-                    peprs_core::error::Error::invalid_format("Invalid 'subsamples' format").into(),
-                )
-            }
-        };
-
-        // Build the project
-        let inner = Project::from_memory(config, samples_df, subsamples).build()?;
-        Ok(PyProject { inner })
+        load_from_pephub(&registry)
     }
 
     ///
@@ -661,23 +612,81 @@ impl PyProject {
     }
 
     ///
-    /// Get the raw project config as a Python dict.
+    /// Get the project config as a live, mutable mapping.
+    ///
+    /// Returns a [`Config`](crate::config::PyConfig) proxy backed by this
+    /// project. Item assignment (`project.config["key"] = value`) mutates the
+    /// project's config in place and persists across accesses. Call
+    /// [`reprocess`](Self::reprocess) afterward to apply structural changes (e.g.
+    /// sample modifiers) to the processed sample table.
     ///
     /// # Returns
     ///
-    /// A Python dict of the raw config, or `None` if no config exists.
+    /// A `Config` mapping proxy.
     ///
-    #[getter]
-    pub fn get_config(&self) -> PyResult<Py<PyAny>> {
-        Python::attach(|py| match &self.inner.config {
-            Some(config) => {
-                let value = config.get_raw_config(None, None);
-                let obj =
-                    pythonize(py, &value).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-                Ok(obj.into())
-            }
-            None => Ok(py.None()),
-        })
+    #[getter(config)]
+    fn get_config(slf: Py<Self>, py: Python<'_>) -> PyResult<Py<PyConfig>> {
+        Py::new(py, PyConfig { project: slf })
+    }
+
+    ///
+    /// Replace the entire project config from a dict-like mapping.
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - A dict (or `Config`) providing the new config.
+    ///
+    #[setter(config)]
+    fn set_config(&mut self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        let json_val: Value = if let Ok(cfg) = value.cast::<PyConfig>() {
+            cfg.borrow().snapshot(py)?
+        } else {
+            depythonize(value).map_err(|e| PyRuntimeError::new_err(e.to_string()))?
+        };
+        let mut new_config: ProjectConfig = serde_json::from_value(json_val.clone())
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        new_config.raw = Some(json_val);
+        self.inner.config = Some(new_config);
+        Ok(())
+    }
+
+    ///
+    /// Re-run sample processing from the current in-memory config and raw tables.
+    ///
+    /// Recomputes the processed sample table by re-applying the config's sample
+    /// modifiers and subsample merge to the in-memory raw samples/subsamples.
+    /// Does not read anything from disk. Call this after mutating `config` so the
+    /// processed samples reflect the changes.
+    ///
+    pub fn reprocess(&mut self) -> Result<(), PeprsCoreError> {
+        self.inner.reprocess()?;
+        Ok(())
+    }
+
+    ///
+    /// Add a new sample to the project's raw sample table.
+    ///
+    /// **Warning:** this method is unoptimized and errors can occur, so use with
+    /// caution. It only updates the raw sample table; the processed sample table
+    /// is left stale until you call [`reprocess`](Self::reprocess).
+    ///
+    /// # Arguments
+    ///
+    /// * `sample` - A dict (attribute name -> value) describing the new sample.
+    ///
+    /// Appends one row to the raw sample table. The processed sample table is
+    /// left unchanged; call [`reprocess`](Self::reprocess) afterward to fold the
+    /// new sample into the processed output.
+    ///
+    /// # Errors
+    ///
+    /// Raises `ValueError` if `sample` is not a mapping, and `RuntimeError` if
+    /// its index value (e.g. `sample_name`) already exists in the raw table.
+    ///
+    pub fn add_sample(&mut self, sample: &Bound<'_, PyAny>) -> PyResult<()> {
+        let value: Value = depythonize(sample).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        self.inner.add_sample(value).map_err(PeprsCoreError::from)?;
+        Ok(())
     }
 
     ///
@@ -803,22 +812,6 @@ impl PyProject {
     }
 
     ///
-    /// Re-run sample processing from the current in-memory config and raw tables.
-    ///
-    /// Recomputes the processed sample table by re-applying the config's sample
-    /// modifiers and subsample merge to the in-memory raw samples/subsamples.
-    /// Does not read anything from disk.
-    ///
-    /// # Errors
-    ///
-    /// Raises `ValueError` if the project has no config.
-    ///
-    pub fn reprocess(&mut self) -> Result<(), PeprsCoreError> {
-        self.inner.reprocess()?;
-        Ok(())
-    }
-
-    ///
     /// Returns a boolean value if project sample table is the same.
     /// This function DOES NOT check if configs are the same
     ///
@@ -843,6 +836,74 @@ impl PyProject {
     fn len(&self) -> PyResult<usize> {
         Ok(self.inner.len())
     }
+}
+
+///
+/// Load a Project from a PepHub registry path.
+///
+/// Shared by [`PyProject::from_pephub`] and the `py_new` constructor (as a
+/// fallback when the given path is not a local YAML/CSV file).
+///
+fn load_from_pephub(registry: &str) -> Result<PyProject, PeprsCoreError> {
+    let pephub = Api::new().map_err(|e| {
+        peprs_core::error::Error::Processing(format!("Failed to create PepHub client: {}", e))
+    })?;
+
+    // Fetch the full project JSON (config + samples + subsamples)
+    let raw = pephub.get_raw(registry).map_err(|e| {
+        if e.status_code() == Some(404) {
+            peprs_core::error::Error::Processing(
+                "Project not found or user is unauthorized".to_string(),
+            )
+        } else {
+            peprs_core::error::Error::Processing(format!("Failed to fetch from PepHub: {}", e))
+        }
+    })?;
+
+    let raw_value: Value = serde_json::from_str(&raw).map_err(peprs_core::error::Error::Json)?;
+
+    // 1. Config
+    let config_value = raw_value
+        .get("config")
+        .ok_or_else(|| peprs_core::error::Error::invalid_format("Missing 'config' key"))?;
+    let mut config: ProjectConfig =
+        serde_json::from_value(config_value.clone()).map_err(peprs_core::error::Error::Json)?;
+    config.raw = Some(config_value.clone());
+
+    // 2. Samples
+    let samples_obj = raw_value
+        .get("samples") // TODO: change to samples
+        .ok_or_else(|| peprs_core::error::Error::invalid_format("Missing 'sample_list' key"))?;
+    let samples_bytes = samples_obj.to_string();
+    let samples_df = JsonReader::new(Cursor::new(samples_bytes.as_bytes()))
+        .finish()
+        .map_err(peprs_core::error::Error::Polars)?;
+
+    // 3. Subsamples
+    let subsamples = match raw_value.get("subsamples") {
+        // TODO: change to subsamples
+        Some(Value::Array(subs_list)) => {
+            let mut dfs = Vec::new();
+            for sub_item in subs_list {
+                let sub_bytes = sub_item.to_string();
+                let sub_df = JsonReader::new(Cursor::new(sub_bytes.as_bytes()))
+                    .finish()
+                    .map_err(peprs_core::error::Error::Polars)?;
+                dfs.push(sub_df);
+            }
+            Some(dfs)
+        }
+        Some(Value::Null) | None => None,
+        _ => {
+            return Err(
+                peprs_core::error::Error::invalid_format("Invalid 'subsamples' format").into(),
+            )
+        }
+    };
+
+    // Build the project
+    let inner = Project::from_memory(config, samples_df, subsamples).build()?;
+    Ok(PyProject { inner })
 }
 
 ///
