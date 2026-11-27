@@ -1,6 +1,6 @@
 [package]
 name = "peprs-eido"
-version = "0.2.2"
+version = "0.3.0"
 description = "JSON-schema validation for PEP projects (eido extensions)"
 edition.workspace = true
 license.workspace = true
