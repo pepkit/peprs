@@ -931,6 +931,17 @@ impl Project {
                     for rule in imply_rules {
                         let schema = new_lf.collect_schema()?;
 
+                        // If any column referenced by the `if` condition is
+                        // missing from the table, no sample can match, so skip
+                        // the rule entirely (issue #55).
+                        if rule
+                            .if_condition
+                            .keys()
+                            .any(|attr_name| !schema.contains(attr_name.as_str()))
+                        {
+                            continue;
+                        }
+
                         let mut condition: Option<Expr> = None;
                         for (attr_name, imply_condition) in &rule.if_condition {
                             let col_as_str = col(attr_name).cast(DataType::String);
@@ -1322,6 +1333,11 @@ mod tests {
     }
 
     #[fixture]
+    fn imply_missing_col_pep() -> &'static str {
+        "../example-peps/example_imply_missing_col/project_config.yaml"
+    }
+
+    #[fixture]
     fn derive_pep() -> &'static str {
         "../example-peps/example_derive/project_config.yaml"
     }
@@ -1358,6 +1374,7 @@ mod tests {
     #[case("../example-peps/example_duplicate/project_config.yaml")]
     #[case("../example-peps/example_append/project_config.yaml")]
     #[case("../example-peps/example_imply/project_config.yaml")]
+    #[case("../example-peps/example_imply_missing_col/project_config.yaml")]
     #[case("../example-peps/example_derive/project_config.yaml")]
     #[case("../example-peps/example_imports/project_config.yaml")]
     #[case("../example-peps/example_amendments1/project_config.yaml")]
